@@ -1638,4 +1638,4 @@ def halomod_Tk3D_cNG(cosmo, hmc, prof, prof2=None, prof3=None, prof4=None,
     tk3d = Tk3D(a_arr=a_arr, lk_arr=lk_arr, tkk_arr=tkk,
                 extrap_order_lok=extrap_order_lok,
                 extrap_order_hik=extrap_order_hik, is_logt=use_log)
-    return tk3d
+    return tk3d, None
