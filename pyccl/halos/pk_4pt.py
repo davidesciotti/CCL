@@ -413,7 +413,7 @@ def halomod_Tk3D_SSC(
     extrap = cosmo if extrap_pk else None  # extrapolation rule for pk2d
 
     dpk12, dpk34 = [np.zeros((len(a_arr), len(k_use))) for _ in range(2)]
-    pk2d_array_tosave, dpk2d_array_tosave = [np.zeros((len(a_arr), len(k_use))) for _ in range(2)]
+    pk2d_array_tosave, dpk2d_array_tosave, p_xy_tosave = [np.zeros((len(a_arr), len(k_use))) for _ in range(3)]
     bA12_tosave, bB12_tosave, bA34_tosave, bB34_tosave = [np.zeros((len(a_arr), len(k_use))) for _ in range(4)]
     for ia, aa in enumerate(a_arr):
         # normalizations & I11 integral
@@ -470,15 +470,17 @@ def halomod_Tk3D_SSC(
             bB = i11_B / nB if pB.is_number_counts else np.zeros_like(k_use)
             i02 = hmc.I_0_2(cosmo, k_use, aa, pA, prof2=pB, prof_2pt=p2pt)
             P = (pk * i11_A * i11_B + i02) / (nA * nB)
-            return (bA + bB) * P, bA, bB
+            return (bA + bB) * P, P, bA, bB
 
         if prof.is_number_counts or prof2.is_number_counts:
             dpk12[ia] -= _get_counterterm(prof, prof2, prof12_2pt,
                                           norm1, norm2, i11_1, i11_2)[0]
+            p_xy_tosave[ia] = _get_counterterm(prof3, prof4, prof34_2pt,
+                                             norm3, norm4, i11_3, i11_4)[1]
             bA12_tosave[ia] = _get_counterterm(prof, prof2, prof12_2pt,
-                                             norm1, norm2, i11_1, i11_2)[1]
-            bB12_tosave[ia] = _get_counterterm(prof, prof2, prof12_2pt,
                                              norm1, norm2, i11_1, i11_2)[2]
+            bB12_tosave[ia] = _get_counterterm(prof, prof2, prof12_2pt,
+                                             norm1, norm2, i11_1, i11_2)[3]
 
         if prof3.is_number_counts or prof4.is_number_counts:
             if (prof, prof2, prof12_2pt) == (prof3, prof4, prof34_2pt):
@@ -486,10 +488,12 @@ def halomod_Tk3D_SSC(
             else:
                 dpk34[ia] -= _get_counterterm(prof3, prof4, prof34_2pt,
                                               norm3, norm4, i11_3, i11_4)[0]
-                bA34_tosave[ia] = _get_counterterm(prof3, prof4, prof34_2pt,
+                p_xy_tosave[ia] = _get_counterterm(prof3, prof4, prof34_2pt,
                                                  norm3, norm4, i11_3, i11_4)[1]
-                bB34_tosave[ia] = _get_counterterm(prof3, prof4, prof34_2pt,
+                bA34_tosave[ia] = _get_counterterm(prof3, prof4, prof34_2pt,
                                                  norm3, norm4, i11_3, i11_4)[2]
+                bB34_tosave[ia] = _get_counterterm(prof3, prof4, prof34_2pt,
+                                                 norm3, norm4, i11_3, i11_4)[3]
 
     dpk12, dpk34, use_log = _logged_output(dpk12, dpk34, log=use_log)
     
@@ -500,13 +504,13 @@ def halomod_Tk3D_SSC(
         'dpk34': dpk34.T,
         'pk2d_linear': pk2d_array_tosave.T,
         'dpk2d_linear': dpk2d_array_tosave.T,
-        'bA12_tosave': bA12_tosave.T,
-        'bB12_tosave': bB12_tosave.T,
-        'bA34_tosave': bA34_tosave.T,
-        'bB34_tosave': bB34_tosave.T,
-        
+        'bA12': bA12_tosave.T,
+        'bB12': bB12_tosave.T,
+        'bA34': bA34_tosave.T,
+        'bB34': bB34_tosave.T,
+        'p_xy': p_xy_tosave.T,
     }
-
+    
     return Tk3D(a_arr=a_arr, lk_arr=lk_arr,
                 pk1_arr=dpk12, pk2_arr=dpk34,
                 extrap_order_lok=extrap_order_lok,
