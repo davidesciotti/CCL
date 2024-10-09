@@ -241,6 +241,44 @@ class HMCalculator(CCLAutoRepr):
         self._get_ingredients(cosmo, a, get_bf=True)
         uk = prof.fourier(cosmo, k, self._mass, a).T
         return self._integrate_over_mbf(uk)
+    
+    # DSadd
+    def b2h_of_b1h_fit(self, b1h_ofz):
+        """ Second-order galaxy bias from fit in Lazeyras et al. 2016"""
+        return 0.412 - 2.143 * b1h_ofz + 0.929 * (b1h_ofz ** 2) + 0.008 * (b1h_ofz ** 3)
+    
+    # DSadd
+    def I_2_1_dav(self, cosmo, k, a, prof):
+        """ Solves the integral:
+
+        .. math::
+            I^1_1(k,a|u) = \\int dM\\,n(M,a)\\,b(M,a)\\,
+            \\langle u(k,a|M)\\rangle,
+
+        where :math:`n(M,a)` is the halo mass function,
+        :math:`b(M,a)` is the halo bias, and
+        :math:`\\langle u(k,a|M)\\rangle` is the halo profile as a
+        function of scale, scale factor and halo mass.
+
+        Args:
+            cosmo (:class:`~pyccl.cosmology.Cosmology`): a Cosmology object.
+            k (:obj:`float` or `array`): comoving wavenumber.
+            a (:obj:`float`): scale factor.
+            prof (:class:`~pyccl.halos.profiles.profile_base.HaloProfile`):
+                halo profile.
+
+        Returns:
+            (:obj:`float` or `array`): integral values evaluated at each
+            value of ``k``.
+        """
+        self._check_mass_def(prof)
+        self._get_ingredients(cosmo, a, get_bf=True)
+        
+        # DSmod: replace with 2nd order halo bias
+        self._bf = self.b2h_of_b1h_fit(self._bf)
+        
+        uk = prof.fourier(cosmo, k, self._mass, a).T
+        return self._integrate_over_mbf(uk)
 
     def I_1_3(self, cosmo, k, a, prof, *, prof2=None, prof_2pt, prof3=None):
         """ Solves the integral:
