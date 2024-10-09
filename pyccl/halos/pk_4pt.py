@@ -1,5 +1,5 @@
 __all__ = ("halomod_trispectrum_1h", "halomod_Tk3D_1h",
-           "_halomod_trispectrum_2h_22", "_halomod_trispectrum_2h_13",
+           "halomod_trispectrum_2h_22", "halomod_trispectrum_2h_13",
            "halomod_trispectrum_3h", "halomod_trispectrum_4h",
            "halomod_Tk3D_2h", "halomod_Tk3D_3h", "halomod_Tk3D_4h",
            "halomod_Tk3D_SSC_linear_bias", "halomod_Tk3D_SSC",
@@ -9,6 +9,7 @@ import warnings
 
 import numpy as np
 import scipy
+import time
 
 from .. import CCLWarning, Tk3D, Pk2D
 from . import HaloProfileNFW, Profile2pt
@@ -412,6 +413,8 @@ def halomod_Tk3D_SSC(
     extrap = cosmo if extrap_pk else None  # extrapolation rule for pk2d
 
     dpk12, dpk34 = [np.zeros((len(a_arr), len(k_use))) for _ in range(2)]
+    pk2d_array_tosave, dpk2d_array_tosave, p_xy_tosave = [np.zeros((len(a_arr), len(k_use))) for _ in range(3)]
+    bA12_tosave, bB12_tosave, bA34_tosave, bB34_tosave = [np.zeros((len(a_arr), len(k_use))) for _ in range(4)]
     for ia, aa in enumerate(a_arr):
         # normalizations & I11 integral
         norm1 = prof.get_normalization(cosmo, aa, hmc=hmc)
@@ -451,6 +454,10 @@ def halomod_Tk3D_SSC(
         pk = pk2d(k_use, aa, cosmo=extrap)
         dpk = pk2d(k_use, aa, derivative=True, cosmo=extrap)
 
+        # save pk to normalize the response, and dpk just for fun
+        pk2d_array_tosave[ia] = pk
+        dpk2d_array_tosave[ia] = dpk
+
         # (47/21 - 1/3 dlogPk/dlogk) * I11 * I11 * Pk + I12
         dpk12[ia] = ((47/21 - dpk/3)*i11_1*i11_2*pk + i12_12) / (norm1 * norm2)
         dpk34[ia] = ((47/21 - dpk/3)*i11_3*i11_4*pk + i12_34) / (norm3 * norm4)
@@ -463,25 +470,51 @@ def halomod_Tk3D_SSC(
             bB = i11_B / nB if pB.is_number_counts else np.zeros_like(k_use)
             i02 = hmc.I_0_2(cosmo, k_use, aa, pA, prof2=pB, prof_2pt=p2pt)
             P = (pk * i11_A * i11_B + i02) / (nA * nB)
-            return (bA + bB) * P
+            return (bA + bB) * P, P, bA, bB
 
         if prof.is_number_counts or prof2.is_number_counts:
             dpk12[ia] -= _get_counterterm(prof, prof2, prof12_2pt,
-                                          norm1, norm2, i11_1, i11_2)
+                                          norm1, norm2, i11_1, i11_2)[0]
+            p_xy_tosave[ia] = _get_counterterm(prof3, prof4, prof34_2pt,
+                                             norm3, norm4, i11_3, i11_4)[1]
+            bA12_tosave[ia] = _get_counterterm(prof, prof2, prof12_2pt,
+                                             norm1, norm2, i11_1, i11_2)[2]
+            bB12_tosave[ia] = _get_counterterm(prof, prof2, prof12_2pt,
+                                             norm1, norm2, i11_1, i11_2)[3]
 
         if prof3.is_number_counts or prof4.is_number_counts:
             if (prof, prof2, prof12_2pt) == (prof3, prof4, prof34_2pt):
                 dpk34[ia] = dpk12[ia]
             else:
                 dpk34[ia] -= _get_counterterm(prof3, prof4, prof34_2pt,
-                                              norm3, norm4, i11_3, i11_4)
+                                              norm3, norm4, i11_3, i11_4)[0]
+                p_xy_tosave[ia] = _get_counterterm(prof3, prof4, prof34_2pt,
+                                                 norm3, norm4, i11_3, i11_4)[1]
+                bA34_tosave[ia] = _get_counterterm(prof3, prof4, prof34_2pt,
+                                                 norm3, norm4, i11_3, i11_4)[2]
+                bB34_tosave[ia] = _get_counterterm(prof3, prof4, prof34_2pt,
+                                                 norm3, norm4, i11_3, i11_4)[3]
 
     dpk12, dpk34, use_log = _logged_output(dpk12, dpk34, log=use_log)
+
+    responses_dict = {
+        'a_arr': a_arr,
+        'k_1overMpc': k_use,
+        'dpk12': dpk12.T,
+        'dpk34': dpk34.T,
+        'pk2d_linear': pk2d_array_tosave.T,
+        'dpk2d_linear': dpk2d_array_tosave.T,
+        'bA12': bA12_tosave.T,
+        'bB12': bB12_tosave.T,
+        'bA34': bA34_tosave.T,
+        'bB34': bB34_tosave.T,
+        'p_xy': p_xy_tosave.T,
+    }
 
     return Tk3D(a_arr=a_arr, lk_arr=lk_arr,
                 pk1_arr=dpk12, pk2_arr=dpk34,
                 extrap_order_lok=extrap_order_lok,
-                extrap_order_hik=extrap_order_hik, is_logt=use_log)
+                extrap_order_hik=extrap_order_hik, is_logt=use_log), responses_dict
 
 
 def _allocate_profiles(prof, prof2, prof3, prof4, prof12_2pt, prof34_2pt):
@@ -612,27 +645,30 @@ def _logged_output(*arrs, log):
     return *[np.log(arr) for arr in arrs], log
 
 
-def _halomod_trispectrum_2h_22(cosmo, hmc, k, a, prof, *, prof2=None,
-                               prof3=None, prof4=None, prof13_2pt=None,
-                               prof14_2pt=None, prof24_2pt=None,
-                               prof32_2pt=None, p_of_k_a=None):
-    """ Computes the isotropized halo model 2-halo trispectrum for four
-    profiles :math:`u_{1,2}`, :math:`v_{1,2}` as
+def halomod_trispectrum_2h_22(cosmo, hmc, k, a, prof, *, prof2=None,
+                              prof3=None, prof4=None, prof13_2pt=None,
+                              prof14_2pt=None, prof24_2pt=None,
+                              prof32_2pt=None, p_of_k_a=None):
+    """ Computes the "22" term of the isotropized halo model 2-halo trispectrum
+    for four profiles :math:`u_{1,2}`, :math:`v_{1,2}` as
 
     .. math::
         \\bar{T}^{2h}_{22}(k_1, k_2, a) = \\int \\frac{d\\varphi_1}{2\\pi}
         \\int \\frac{d\\varphi_2}{2\\pi}
-        T^{2h}_{22}({\\bf k_1},-{\\bf k_1},{\\bf k_2},-{\\bf k_2}),
+        T^{2h,(22)}_{u_1,u_2;v_1,v_2}({\\bf k}_1,-{\\bf k}_1,
+        {\\bf k}_2,-{\\bf k}_2),
 
     with
 
     .. math::
-        T^{2h}_{22}_{u_1,u_2;v_1,v_2}(k_u,k_v,a) =
-        P_lin(|k_{u_1} + k_{u_2}|)\\,  I^1_2(k_{u_1}, k_{u_2}|u})\\,
-        I^1_2(k_{v_1}, k_{v_2}|v}) + 2 perm
+        T^{2h,(22)}_{u_1,u_2;v_1,v_2}(k_u,k_v,a) =
+        \\langle P_{\\rm lin}(|{\\bf k}_u + {\\bf k}_v|)\\rangle_{\\varphi}\\,
+        I^1_2(k_u, k_v|u_1,v_1)\\,
+        I^1_2(k_u, k_v|u_2,v_2) + 1\\,{\\rm perm.}
 
-    where :math:`I^1_2` is defined in the documentation
-    of :math:`~HMCalculator.I_1_2`.
+    where :math:`\\langle\\cdots\\rangle_\\varphi` denotes averaging over the
+    relative angle between the two wavevectors, and :math:`I^1_2` is defined in
+    the documentation of :meth:`~pyccl.halos.halo_model.HMCalculator.I_1_2`.
 
     Args:
         cosmo (:class:`~pyccl.core.Cosmology`): a Cosmology object.
@@ -757,29 +793,31 @@ def _halomod_trispectrum_2h_22(cosmo, hmc, k, a, prof, *, prof2=None,
     return out
 
 
-def _halomod_trispectrum_2h_13(cosmo, hmc, k, a, prof, *,
-                               prof2=None, prof3=None, prof4=None,
-                               prof12_2pt=None, prof34_2pt=None,
-                               p_of_k_a=None):
-    """ Computes the isotropized halo model 2-halo trispectrum for four
-    different quantities defined by their respective halo profiles. The 2-halo
-    trispectrum for four profiles :math:`u_{1,2}`, :math:`v_{1,2}` is
-    calculated as:
-
-    .. math::
-        T^{2h}_{13}_{u_1,u_2,v_1,v_2}(k_u,k_v,a) =
-        P_lin(k_u)\\, I^1_1(k_{u_1}|u_1)\\,
-        I^1_3(k_{u_1}, k_{v_1}, k_{v_2}|u_1, v}) + 3 perm
-
-    where :math:`I^1_1` is defined in the documentation of
-    :meth:`~HMCalculator.I_1_1` and :math:`I^1_3` is defined in the
-    documentation of :meth:`~HMCalculator.I_1_3`. Then, this function returns
+def halomod_trispectrum_2h_13(cosmo, hmc, k, a, prof, *,
+                              prof2=None, prof3=None, prof4=None,
+                              prof12_2pt=None, prof34_2pt=None,
+                              p_of_k_a=None):
+    """ Computes the "12" term of the isotropized halo model 2-halo trispectrum
+    for four profiles :math:`u_{1,2}`, :math:`v_{1,2}` as
 
     .. math::
         \\bar{T}^{2h}_{13}(k_1, k_2, a) = \\int \\frac{d\\varphi_1}{2\\pi}
         \\int \\frac{d\\varphi_2}{2\\pi}
-        T^{1h}_{13}({\\bf k_1},-{\\bf k_1},{\\bf k_2},-{\\bf k_2}),
+        T^{2h,(13)}_{u_1,u_2;v_1,v_2}({\\bf k}_1,
+        -{\\bf k}_1,{\\bf k}_2,-{\\bf k}_2),
 
+    with
+
+    .. math::
+        T^{2h,(13)}_{u_1,u_2;v_1,v_2}(k_u,k_v,a) =
+        P_{\\rm lin}(k_u)\\, [I^1_1(k_u|u_1)\\,
+        I^1_3(k_u,k_v,k_v|u_2,v_1,v_2)+(u_1\\leftrightarrow u_2)]+
+        (u_i\\leftrightarrow v_i)
+
+    where :math:`I^1_1` is defined in the documentation of
+    :meth:`~pyccl.halos.halo_model.HMCalculator.I_1_1` and
+    :math:`I^1_3` is defined in the documentation of
+    :meth:`~pyccl.halos.halo_model.HMCalculator.I_1_3`.
 
     Args:
         cosmo (:class:`~pyccl.core.Cosmology`): a Cosmology object.
@@ -922,19 +960,24 @@ def halomod_trispectrum_3h(cosmo, hmc, k, a, prof, *, prof2=None,
     .. math::
         \\bar{T}^{3h}(k_1, k_2, a) = \\int \\frac{d\\varphi_1}{2\\pi}
         \\int \\frac{d\\varphi_2}{2\\pi}
-        T^{2h}_{22}({\\bf k_1},-{\\bf k_1},{\\bf k_2},-{\\bf k_2}),
+        T^{3h}_{u_1,u_2;v_1,v_2}({\\bf k_1},
+        -{\\bf k_1},{\\bf k_2},-{\\bf k_2}),
 
     with
 
     .. math::
-        T^{3h}{u_1,u_2;v_1,v_2}(k_u,k_v,a) =
-        B^{PT}({\bf k_{u_1}}, {\bf k_{u_2}}, {\bf k_{v_1}} + {\bf k_{v_2}}) \\,
-        I^1_1(k_{u_1} | u) I^1_1(k_{u_2} | u) I^1_2(k_{v_1}, k_{v_2}|v}) \\,
-        + 5 perm
+        T^{3h}_{u_1,u_2;v_1,v_2}({\\bf k}_u,{\\bf k}_v,a) =
+        B^{\\rm PT}({\\bf k}_u, -{\\bf k}_v,
+                    -{\\bf k}_u+{\\bf k}_v)
+        I^1_1(k_u | u_1) I^1_1(k_v | v_1) I^1_2(k_u, k_v|u_2,v_2) \\,
+        + 3\\,{\\rm perm.}
 
     where :math:`I^1_1` and :math:`I^1_2` are defined in the documentation
-    of :math:`~HMCalculator.I_1_1` and :math:`~HMCalculator.I_1_2`,
-    respectively; and :math:`B^{PT}` can be found in Eq. 30 of arXiv:1302.6994.
+    of :meth:`~pyccl.halos.halo_model.HMCalculator.I_1_1` and
+    :meth:`~pyccl.halos.halo_model.HMCalculator.I_1_2`,
+    respectively; and the tree-level bispectrum :math:`B^{PT}` is calculated
+    according to Eq. 30 of `Takada et al. 2013
+    <https://arxiv.org/abs/1302.6994>`_
 
     Args:
         cosmo (:class:`~pyccl.core.Cosmology`): a Cosmology object.
@@ -1094,19 +1137,22 @@ def halomod_trispectrum_4h(cosmo, hmc, k, a, prof, prof2=None, prof3=None,
     .. math::
         \\bar{T}^{4h}(k_1, k_2, a) = \\int \\frac{d\\varphi_1}{2\\pi}
         \\int \\frac{d\\varphi_2}{2\\pi}
-        T^{4h}({\\bf k_1},-{\\bf k_1},{\\bf k_2},-{\\bf k_2}),
+        T^{4h}_{u_1,u_2;v_1,v_2}({\\bf k_1},-{\\bf k_1},
+        {\\bf k_2},-{\\bf k_2}),
 
     with
 
     .. math::
-        T^{4h}{u_1,u_2;v_1,v_2}(k_u,k_v,a) =
-        T^{PT}({\bf k_{u_1}}, {\bf k_{u_2}}, {\bf k_{v_1}}, {\bf k_{v_2}}) \\,
-        I^1_1(k_{u_1} | u) I^1_1(k_{u_2} | u) I^1_1(k_{v_1} | v) \\,
-        I^1_1(k_{v_2} | v) \\,
+        T^{4h}_{u_1,u_2;v_1,v_2}({\\bf k}_u,{\\bf k}_v,a) =
+        T^{PT}({\\bf k}_u, -{\\bf k}_u, {\\bf k}_v, -{\\bf k}_v) \\,
+        I^1_1(k_u | u_1) I^1_1(k_u | u_2) I^1_1(k_v | v_1)
+        I^1_1(k_v | v_2) \\,
 
     where :math:`I^1_1` is defined in the documentation
-    of :math:`~HMCalculator.I_1_1` and :math:`P^{PT}` can be found in Eq. 30
-    of arXiv:1302.6994.
+    of :meth:`~pyccl.halos.halo_model.HMCalculator.I_1_1`, and
+    the tree-level trispectrum :math:`T^{PT}` is calculated
+    according to Eq. 30 of `Takada et al. 2013
+    <https://arxiv.org/abs/1302.6994>`_
 
     Args:
         cosmo (:class:`~pyccl.core.Cosmology`): a Cosmology object.
@@ -1299,21 +1345,21 @@ def halomod_Tk3D_2h(cosmo, hmc,
     if a_arr is None:
         a_arr = cosmo.get_pk_spline_a()
 
-    tkk_2h_22 = _halomod_trispectrum_2h_22(cosmo, hmc, np.exp(lk_arr), a_arr,
-                                           prof, prof2=prof2,
-                                           prof3=prof3, prof4=prof4,
-                                           prof13_2pt=prof13_2pt,
-                                           prof14_2pt=prof14_2pt,
-                                           prof24_2pt=prof24_2pt,
-                                           prof32_2pt=prof32_2pt,
-                                           p_of_k_a=p_of_k_a)
+    tkk_2h_22 = halomod_trispectrum_2h_22(cosmo, hmc, np.exp(lk_arr), a_arr,
+                                          prof, prof2=prof2,
+                                          prof3=prof3, prof4=prof4,
+                                          prof13_2pt=prof13_2pt,
+                                          prof14_2pt=prof14_2pt,
+                                          prof24_2pt=prof24_2pt,
+                                          prof32_2pt=prof32_2pt,
+                                          p_of_k_a=p_of_k_a)
 
-    tkk_2h_13 = _halomod_trispectrum_2h_13(cosmo, hmc, np.exp(lk_arr), a_arr,
-                                           prof, prof2=prof2,
-                                           prof3=prof3, prof4=prof4,
-                                           prof12_2pt=prof12_2pt,
-                                           prof34_2pt=prof34_2pt,
-                                           p_of_k_a=p_of_k_a)
+    tkk_2h_13 = halomod_trispectrum_2h_13(cosmo, hmc, np.exp(lk_arr), a_arr,
+                                          prof, prof2=prof2,
+                                          prof3=prof3, prof4=prof4,
+                                          prof12_2pt=prof12_2pt,
+                                          prof34_2pt=prof34_2pt,
+                                          p_of_k_a=p_of_k_a)
 
     tkk = tkk_2h_22 + tkk_2h_13
 
@@ -1549,28 +1595,39 @@ def halomod_Tk3D_cNG(cosmo, hmc, prof, prof2=None, prof3=None, prof4=None,
     if a_arr is None:
         a_arr = cosmo.get_pk_spline_a()
 
+    print('halomod_Tk3D_cNG: computing halomod_trispectrum_1h...')
+    start_time = time.perf_counter()
     tkk = halomod_trispectrum_1h(cosmo, hmc, np.exp(lk_arr), a_arr,
                                  prof, prof2=prof2,
                                  prof12_2pt=prof12_2pt,
                                  prof3=prof3, prof4=prof4,
                                  prof34_2pt=prof34_2pt)
+    print(f'halomod_Tk3D_cNG: computing halomod_trispectrum_1h... done in {(time.perf_counter() - start_time)/60:.2f} m')
 
-    tkk += _halomod_trispectrum_2h_22(cosmo, hmc, np.exp(lk_arr), a_arr,
-                                      prof, prof2=prof2,
-                                      prof3=prof3, prof4=prof4,
-                                      prof13_2pt=prof13_2pt,
-                                      prof14_2pt=prof14_2pt,
-                                      prof24_2pt=prof24_2pt,
-                                      prof32_2pt=prof32_2pt,
-                                      p_of_k_a=p_of_k_a)
+    print('halomod_Tk3D_cNG: computing _halomod_trispectrum_2h_22...')
+    start_time = time.perf_counter()
+    tkk += halomod_trispectrum_2h_22(cosmo, hmc, np.exp(lk_arr), a_arr,
+                                     prof, prof2=prof2,
+                                     prof3=prof3, prof4=prof4,
+                                     prof13_2pt=prof13_2pt,
+                                     prof14_2pt=prof14_2pt,
+                                     prof24_2pt=prof24_2pt,
+                                     prof32_2pt=prof32_2pt,
+                                     p_of_k_a=p_of_k_a)
+    print(f'halomod_Tk3D_cNG: computing _halomod_trispectrum_2h_22... done in {(time.perf_counter() - start_time)/60:.2f} m')
 
-    tkk += _halomod_trispectrum_2h_13(cosmo, hmc, np.exp(lk_arr), a_arr,
-                                      prof, prof2=prof2,
-                                      prof3=prof3, prof4=prof4,
-                                      prof12_2pt=prof12_2pt,
-                                      prof34_2pt=prof34_2pt,
-                                      p_of_k_a=p_of_k_a)
+    print('halomod_Tk3D_cNG: computing _halomod_trispectrum_2h_13...')
+    start_time = time.perf_counter()
+    tkk += halomod_trispectrum_2h_13(cosmo, hmc, np.exp(lk_arr), a_arr,
+                                     prof, prof2=prof2,
+                                     prof3=prof3, prof4=prof4,
+                                     prof12_2pt=prof12_2pt,
+                                     prof34_2pt=prof34_2pt,
+                                     p_of_k_a=p_of_k_a)
+    print(f'halomod_Tk3D_cNG: computing _halomod_trispectrum_2h_13... done in {(time.perf_counter() - start_time)/60:.2f} m')
 
+    print('halomod_Tk3D_cNG: computing halomod_trispectrum_3h...')
+    start_time = time.perf_counter()
     tkk += halomod_trispectrum_3h(cosmo, hmc, np.exp(lk_arr), a_arr,
                                   prof=prof,
                                   prof2=prof2,
@@ -1581,17 +1638,21 @@ def halomod_Tk3D_cNG(cosmo, hmc, prof, prof2=None, prof3=None, prof4=None,
                                   prof24_2pt=prof24_2pt,
                                   prof32_2pt=prof32_2pt,
                                   p_of_k_a=None)
+    print(f'halomod_Tk3D_cNG: computing halomod_trispectrum_3h... done in {(time.perf_counter() - start_time)/60:.2f} m')
 
+    print('halomod_Tk3D_cNG: computing halomod_trispectrum_4h...')
+    start_time = time.perf_counter()
     tkk += halomod_trispectrum_4h(cosmo, hmc, np.exp(lk_arr), a_arr,
                                   prof=prof,
                                   prof2=prof2,
                                   prof3=prof3,
                                   prof4=prof4,
                                   p_of_k_a=None)
+    print(f'halomod_Tk3D_cNG: computing halomod_trispectrum_4h... done in {(time.perf_counter() - start_time)/60:.2f} m')
 
     tkk, use_log = _logged_output(tkk, log=use_log)
 
     tk3d = Tk3D(a_arr=a_arr, lk_arr=lk_arr, tkk_arr=tkk,
                 extrap_order_lok=extrap_order_lok,
                 extrap_order_hik=extrap_order_hik, is_logt=use_log)
-    return tk3d
+    return tk3d, None
