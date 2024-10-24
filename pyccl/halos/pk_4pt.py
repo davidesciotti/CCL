@@ -469,6 +469,7 @@ def halomod_Tk3D_SSC(
             bA = i11_A / nA if pA.is_number_counts else np.zeros_like(k_use)
             bB = i11_B / nB if pB.is_number_counts else np.zeros_like(k_use)
             i02 = hmc.I_0_2(cosmo, k_use, aa, pA, prof2=pB, prof_2pt=p2pt)
+            # P(k) halo model = P1h + P2h = I^0_2(k, k) + (I^1_1)^2 * P_lin(k)
             P = (pk * i11_A * i11_B + i02) / (nA * nB)
             return (bA + bB) * P, P, bA, bB
 
