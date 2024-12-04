@@ -315,11 +315,20 @@ def halomod_Tk3D_SSC_linear_bias(cosmo, hmc, *, prof,
         dpk34[ia] *= bias3[ia] * bias4[ia]
 
     dpk12, dpk34, use_log = _logged_output(dpk12, dpk34, log=use_log)
+    
+    
+    responses_dict = {
+        'a_arr': a_arr,
+        'k_1overMpc': k_use,
+        'dpk12': dpk12.T,
+        'dpk34': dpk34.T,
+    }
+
 
     return Tk3D(a_arr=a_arr, lk_arr=lk_arr,
                 pk1_arr=dpk12, pk2_arr=dpk34,
                 extrap_order_lok=extrap_order_lok,
-                extrap_order_hik=extrap_order_hik, is_logt=use_log)
+                extrap_order_hik=extrap_order_hik, is_logt=use_log), responses_dict
 
 
 def halomod_Tk3D_SSC(
