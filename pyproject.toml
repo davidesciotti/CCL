@@ -27,7 +27,7 @@ classifiers = [
 dependencies = [
     "numpy",
     "packaging",
-    "scipy",
+    "scipy<1.14",
     "pyyaml",
 ]
 
