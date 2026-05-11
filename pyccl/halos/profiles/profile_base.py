@@ -516,6 +516,5 @@ class HaloProfileMatter(HaloProfile):
 class HaloProfilePressure(HaloProfile):
     """Base for pressure halo profiles."""
 
-
 class HaloProfileCIB(HaloProfile):
     """Base for CIB halo profiles."""
