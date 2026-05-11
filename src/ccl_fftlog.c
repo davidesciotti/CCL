@@ -340,6 +340,7 @@ static void fht(int npk, int N,
   if(reverse_plan != NULL) fftw_destroy_plan(reverse_plan);
 
   free(ulocal);
+  //TODO: free this up
   fftw_free(a_tmp);
   fftw_free(b_tmp);
 }
@@ -501,6 +502,7 @@ static void general_fht(int npk, int N,
   if(reverse_plan != NULL) fftw_destroy_plan(reverse_plan);
 
   free(ulocal);
+  //TODO: free this up
   fftw_free(a_tmp);
   fftw_free(b_tmp);
 }

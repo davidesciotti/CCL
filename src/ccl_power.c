@@ -129,8 +129,8 @@ static ccl_f2d_t *ccl_compute_linpower_analytic(ccl_cosmology* cosmo, void* par,
       y2d[j] += log_sigma8;
   }
 
-  // Free the first spline unconditionally; re-allocate with normalization only on success.
-  // Without this, a ccl_sigma8 failure above would leak the first psp_out.
+  // Free the first spline unconditionally; re-allocate with normalisation only on success.
+  // Without this, ccl_sigma8 failure above would leak the first psp_out.
   ccl_f2d_t_free(psp_out);
   psp_out = NULL;
 
