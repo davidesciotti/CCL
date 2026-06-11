@@ -1099,8 +1099,8 @@ def halomod_trispectrum_3h(cosmo, hmc, k, a, prof, *, prof2=None,
         else:
             Bpt = get_Bpt(aa)
 
-        tk_3h = Bpt * (i1 * i3 * i24 + i1 * i4 * i32 +
-                       i3 * i2 * i14 + i4 * i2 * i31)
+        tk_3h = Bpt * (i1 * i3 * i24 + i1 * i4 * i32.T +
+                       i3 * i2 * i14 + i4 * i2 * i31.T)
 
         # Normalize
         out[ia, :, :] = tk_3h / norm
